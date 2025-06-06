@@ -28,7 +28,7 @@ class ChatApp:
         self.broadcast_socket = None
         self.is_online = False
         self.hostname = socket.gethostname()
-        self.local_ip = self.get_local_ip()
+        self.local_ips = self.get_all_local_ips()
         self.uuid = self.generate_uuid()
         self.peers = {}  # 存储对端信息
         
@@ -65,24 +65,36 @@ class ChatApp:
             # 如果生成失败，使用随机UUID
             return str(uuid.uuid4())
     
-    def get_local_ip(self):
+    def get_all_local_ips(self):
+        ips = []
         try:
-            # 创建一个UDP socket
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            # 连接一个外部地址（不需要真实连接）
-            s.connect(('8.8.8.8', 80))
-            # 获取本地IP
-            ip = s.getsockname()[0]
-            s.close()
-            return ip
-        except Exception:
-            # 如果上述方法失败，尝试获取所有网络接口
+            # 获取所有网络接口的IP地址
+            hostname = socket.gethostname()
+            # 获取所有IP（包括IPv4和IPv6）
+            all_ips = socket.getaddrinfo(hostname, None)
+            
+            # 过滤出IPv4地址
+            for ip in all_ips:
+                if ip[0] == socket.AF_INET:  # 只获取IPv4地址
+                    if ip[4][0] != '127.0.0.1':  # 排除本地回环地址
+                        ips.append(ip[4][0])
+            
+            # 尝试获取外部连接IP
             try:
-                hostname = socket.gethostname()
-                ip = socket.gethostbyname(hostname)
-                return ip
-            except Exception:
-                return '127.0.0.1'
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.connect(('8.8.8.8', 80))
+                external_ip = s.getsockname()[0]
+                s.close()
+                if external_ip not in ips:
+                    ips.append(external_ip)
+            except:
+                pass
+                
+        except Exception as e:
+            print(f"获取IP地址错误: {e}")
+            ips.append('127.0.0.1')
+        
+        return ips
     
     def create_settings_panel(self):
         # 设置面板
@@ -96,7 +108,14 @@ class ChatApp:
         ttk.Label(host_info, text="本机名：").pack(side=tk.LEFT)
         ttk.Label(host_info, text=self.hostname).pack(side=tk.LEFT, padx=(0, 20))
         ttk.Label(host_info, text="UUID：").pack(side=tk.LEFT)
-        ttk.Label(host_info, text=self.uuid[:8]).pack(side=tk.LEFT)  # 只显示UUID的前8位
+        ttk.Label(host_info, text=self.uuid[:8]).pack(side=tk.LEFT, padx=(0, 20))
+        
+        # IP地址显示
+        ip_frame = ttk.Frame(self.settings_frame)
+        ip_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(ip_frame, text="本机IP：").pack(side=tk.LEFT)
+        for ip in self.local_ips:
+            ttk.Label(ip_frame, text=ip).pack(side=tk.LEFT, padx=(0, 10))
         
         # 端口设置
         port_frame = ttk.Frame(self.settings_frame)
@@ -348,7 +367,7 @@ class ChatApp:
         if not message:
             return
             
-        selected_peers = self.checked_items  # 使用选中的项目而不是selection
+        selected_peers = self.checked_items
         if not selected_peers:
             messagebox.showwarning("提示", "请选择至少一个接收方")
             return
@@ -356,6 +375,7 @@ class ChatApp:
         message_data = {
             'type': 'message',
             'from': self.hostname,
+            'uuid': self.uuid,  # 添加UUID到消息中
             'content': message,
             'timestamp': datetime.now().timestamp()
         }
@@ -391,6 +411,7 @@ class ChatApp:
         file_info = {
             'type': 'file',
             'from': self.hostname,
+            'uuid': self.uuid,  # 添加UUID到文件信息中
             'content': {
                 'filename': file_name,
                 'filesize': file_size
@@ -443,16 +464,43 @@ class ChatApp:
     def update_chat_display(self, message, is_self=False):
         self.chat_display.config(state='normal')
         timestamp = datetime.now().strftime("%H:%M:%S")
-        prefix = "你" if is_self else message.get('from', 'Unknown')
-        self.chat_display.insert(tk.END, f"[{timestamp}] {prefix}: {message.get('content', '')}\n")
+        
+        if message.get('type') == 'system':
+            # 系统消息使用不同的格式显示
+            self.chat_display.insert(tk.END, f"[{timestamp}] 系统: {message['content']}\n")
+        else:
+            # 普通消息显示
+            prefix = "你" if is_self else message.get('from', 'Unknown')
+            content = message.get('content', '')
+            if isinstance(content, str):  # 只显示字符串类型的内容
+                self.chat_display.insert(tk.END, f"[{timestamp}] {prefix}: {content}\n")
+        
         self.chat_display.see(tk.END)
         self.chat_display.config(state='disabled')
     
     def handle_file(self, message, addr):
+        # 检查发送者是否在联系人列表中
+        sender_info = message.get('from', 'Unknown')
+        sender_uuid = message.get('uuid')
+        
+        if sender_uuid and sender_uuid != self.uuid:  # 确保不是自己发的消息
+            peer_id = f"{sender_info}_{addr[0]}"
+            if peer_id not in self.peers:
+                # 添加新联系人
+                peer_info = {
+                    'hostname': sender_info,
+                    'ip': addr[0],
+                    'port': addr[1],
+                    'uuid': sender_uuid
+                }
+                self.peers[peer_id] = peer_info
+                self.peers_list.insert('', 'end', peer_id,
+                    values=(sender_info, addr[0], addr[1], sender_uuid[:8]),
+                    image=self.unchecked_img)
+        
         content = message['content']
         filename = content['filename']
         filesize = content['filesize']
-        sender = message.get('from', addr[0])
         
         # 创建接收目录
         save_dir = os.path.join(os.path.expanduser("~"), "Downloads", "ChatFiles")
@@ -461,7 +509,7 @@ class ChatApp:
         save_path = os.path.join(save_dir, filename)
         
         self.update_chat_display({
-            'from': sender,
+            'from': sender_info,
             'content': f"正在接收文件: {filename} ({filesize} 字节)"
         })
         
@@ -485,7 +533,7 @@ class ChatApp:
                 self.progress['value'] = 100
                 self.progress_label.config(text=f"文件接收完成: {filename}")
                 self.update_chat_display({
-                    'from': sender,
+                    'from': sender_info,
                     'content': f"文件 {filename} 接收完成，保存在: {save_path}"
                 })
                 
@@ -500,46 +548,58 @@ class ChatApp:
             self.root.after(2000, lambda: self.progress.configure(value=0))
     
     def handle_message(self, message, addr):
+        # 检查发送者是否在联系人列表中
+        sender_info = message.get('from', 'Unknown')
+        sender_uuid = message.get('uuid')
+        
+        if sender_uuid and sender_uuid != self.uuid:  # 确保不是自己发的消息
+            peer_id = f"{sender_info}_{addr[0]}"
+            if peer_id not in self.peers:
+                # 添加新联系人
+                peer_info = {
+                    'hostname': sender_info,
+                    'ip': addr[0],
+                    'port': addr[1],
+                    'uuid': sender_uuid
+                }
+                self.peers[peer_id] = peer_info
+                self.peers_list.insert('', 'end', peer_id,
+                    values=(sender_info, addr[0], addr[1], sender_uuid[:8]),
+                    image=self.unchecked_img)
+                
+                # 显示系统消息
+                self.update_chat_display({
+                    'type': 'system',
+                    'content': f"新联系人已添加: {sender_info} ({addr[0]})"
+                })
+        
         self.update_chat_display(message)
-    
-    def handle_broadcast(self, message, addr):
-        content = message['content']
-        if content['uuid'] == self.uuid:
-            return  # 忽略自己的广播
-            
-        peer_id = f"{content['hostname']}_{content['ip']}"
-        if peer_id not in self.peers:
-            self.peers[peer_id] = content
-            self.peers_list.insert('', 'end', peer_id, 
-                values=(content['hostname'], content['ip'], 
-                       content['port'], content['uuid'][:8]),
-                image=self.unchecked_img)  # 添加未选中的复选框图片
     
     def broadcast_presence(self, force=False):
         if not self.is_online:
             return
             
-        message = {
-            'type': 'broadcast',
-            'content': {
-                'ip': self.local_ip,
-                'port': self.UDP_PORT,
-                'hostname': self.hostname,
-                'uuid': self.uuid
+        # 为每个本地IP发送广播
+        for ip in self.local_ips:
+            message = {
+                'type': 'broadcast',
+                'content': {
+                    'ip': ip,
+                    'port': self.UDP_PORT,
+                    'hostname': self.hostname,
+                    'uuid': self.uuid
+                }
             }
-        }
-        
-        try:
-            self.broadcast_socket.sendto(json.dumps(message).encode(), ('<broadcast>', self.BROADCAST_PORT))
-            if force:
-                # 强制刷新时多发送几次
-                time.sleep(0.1)
+            
+            try:
                 self.broadcast_socket.sendto(json.dumps(message).encode(), ('<broadcast>', self.BROADCAST_PORT))
-        except Exception as e:
-            if self.running:  # 只在running为True时打印错误
-                print(f"广播错误: {e}")
+                if force:
+                    time.sleep(0.1)
+                    self.broadcast_socket.sendto(json.dumps(message).encode(), ('<broadcast>', self.BROADCAST_PORT))
+            except Exception as e:
+                if self.running:
+                    print(f"广播错误: {e}")
         
-        # 定期重新广播
         self.broadcast_timer = self.root.after(10000, self.broadcast_presence)
     
     def start_network_threads(self):
@@ -563,9 +623,10 @@ class ChatApp:
                 data, addr = self.socket.recvfrom(65535)
                 try:
                     message = json.loads(data.decode())
-                    if message['type'] == 'message':
+                    message_type = message.get('type', '')
+                    if message_type == 'message':
                         self.handle_message(message, addr)
-                    elif message['type'] == 'file':
+                    elif message_type == 'file':
                         self.handle_file(message, addr)
                 except json.JSONDecodeError:
                     # 如果不是JSON格式，认为是文件内容
@@ -594,6 +655,25 @@ class ChatApp:
             except Exception as e:
                 if self.running:  # 只在running为True时打印错误
                     print(f"接收广播错误: {e}")
+
+    def handle_broadcast(self, message, addr):
+        content = message['content']
+        if content['uuid'] == self.uuid:
+            return  # 忽略自己的广播
+            
+        peer_id = f"{content['hostname']}_{content['ip']}"
+        if peer_id not in self.peers:
+            self.peers[peer_id] = content
+            self.peers_list.insert('', 'end', peer_id, 
+                values=(content['hostname'], content['ip'], 
+                       content['port'], content['uuid'][:8]),
+                image=self.unchecked_img)
+            
+            # 可以添加一个状态栏消息或者在聊天框中显示系统消息
+            self.update_chat_display({
+                'type': 'system',
+                'content': f"新联系人已添加: {content['hostname']} ({content['ip']})"
+            })
 
     def create_right_panel(self):
         # 右侧面板（聊天区域）

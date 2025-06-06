@@ -12,11 +12,12 @@
         5. 本机信息：
             需要显示本机名，绑定本机所有地址，端口为默认UDP:8859，可以进行修改，点击上线后再创建所有socket端口连接
             广播监听端口为8850，发送端口采用消息端口
+            显示本机所有的IP地址
         6. 创建列表，显示对端的主机名和IP，在列表前有一个复选框，如果勾选了在发送时对勾选的对端都要发送
     
     协议需要：使用json格式，type字段可以为message,file,broadcast。
-        content字段：type为message时，content字段为发送内容
-        type为file时，content字段为filename，filesize
+        content字段：type为message时，content字段为发送内容，本机UUID
+        type为file时，content字段为filename，filesize，本机UUID
         broadcast时，content字段为本机或者对端的IP地址，端口，主机名，UUID
             UUID根据启动时间生成，
     
@@ -26,5 +27,6 @@
         3. 如果没有广播，也可以通过添加联系人的方式添加ip，端口，主机名
         4. 选择联系人，点击删除可以将该通信人删除
         5. 点击刷新，则重新发送广播用于联系人同步，通知其他人员本机上线
+        6. 收到对方消息，若对方不在本地联系人列表中需要添加到联系人列表
 
 
