@@ -184,19 +184,21 @@ class ChatApp:
         
         # 对端列表
         columns = ('hostname', 'ip', 'port', 'uuid')
-        self.peers_list = ttk.Treeview(self.left_panel, columns=columns, height=20, selectmode='extended', show='tree headings')
+        self.peers_list = ttk.Treeview(self.left_panel, columns=columns, height=20, selectmode='none', show='tree headings')
         
         # 设置列标题
+        self.peers_list.heading('#0', text='√')  # 复选框列
         self.peers_list.heading('hostname', text='主机名')
         self.peers_list.heading('ip', text='IP地址')
         self.peers_list.heading('port', text='端口')
         self.peers_list.heading('uuid', text='UUID')
         
         # 设置列宽度
-        self.peers_list.column('hostname', width=100)
-        self.peers_list.column('ip', width=120)
-        self.peers_list.column('port', width=60)
-        self.peers_list.column('uuid', width=80)
+        self.peers_list.column('#0', width=30, stretch=False)  # 复选框列
+        self.peers_list.column('hostname', width=100, stretch=True)
+        self.peers_list.column('ip', width=130, stretch=True)
+        self.peers_list.column('port', width=50, stretch=False)
+        self.peers_list.column('uuid', width=70, stretch=False)
         
         # 添加滚动条
         scrollbar = ttk.Scrollbar(self.left_panel, orient="vertical", command=self.peers_list.yview)
@@ -206,30 +208,41 @@ class ChatApp:
         self.peers_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=5)
         
-        # 绑定选择事件
-        self.peers_list.bind('<<TreeviewSelect>>', self.on_select)
-        
         # 创建复选框图片
-        self.checked_img = tk.PhotoImage(width=16, height=16)
-        self.unchecked_img = tk.PhotoImage(width=16, height=16)
-        self.checked_img.put(('black',), to=(3, 7, 12, 8))
-        self.checked_img.put(('black',), to=(3, 8, 12, 9))
-        self.checked_img.put(('black',), to=(3, 9, 12, 10))
-        self.checked_img.put(('black',), to=(3, 10, 12, 11))
+        self.checked_img = tk.PhotoImage(width=13, height=13)
+        self.unchecked_img = tk.PhotoImage(width=13, height=13)
+        
+        # 绘制复选框
+        self.checked_img.put(('black',), to=(2, 2, 10, 3))  # 顶边
+        self.checked_img.put(('black',), to=(2, 9, 10, 10))  # 底边
+        self.checked_img.put(('black',), to=(2, 2, 3, 10))  # 左边
+        self.checked_img.put(('black',), to=(9, 2, 10, 10))  # 右边
+        self.checked_img.put(('black',), to=(3, 5, 8, 7))  # 对勾的横线
+        self.checked_img.put(('black',), to=(3, 7, 3, 8))  # 对勾的竖线
+        
+        self.unchecked_img.put(('black',), to=(2, 2, 10, 3))  # 顶边
+        self.unchecked_img.put(('black',), to=(2, 9, 10, 10))  # 底边
+        self.unchecked_img.put(('black',), to=(2, 2, 3, 10))  # 左边
+        self.unchecked_img.put(('black',), to=(9, 2, 10, 10))  # 右边
         
         # 存储选中状态
         self.checked_items = set()
-    
-    def on_select(self, event):
-        # 处理选择事件
-        item = self.peers_list.selection()
-        if item:
-            if item[0] in self.checked_items:
-                self.checked_items.remove(item[0])
-                self.peers_list.item(item[0], image=self.unchecked_img)
-            else:
-                self.checked_items.add(item[0])
-                self.peers_list.item(item[0], image=self.checked_img)
+        
+        # 绑定点击事件
+        self.peers_list.bind('<Button-1>', self.on_click)
+        
+    def on_click(self, event):
+        # 获取点击的区域
+        region = self.peers_list.identify_region(event.x, event.y)
+        if region == "tree":  # 只处理复选框列的点击
+            item = self.peers_list.identify_row(event.y)
+            if item:  # 确保点击在有效行上
+                if item in self.checked_items:
+                    self.checked_items.remove(item)
+                    self.peers_list.item(item, image=self.unchecked_img)
+                else:
+                    self.checked_items.add(item)
+                    self.peers_list.item(item, image=self.checked_img)
     
     def delete_selected_contact(self):
         selected = self.peers_list.selection()
@@ -425,7 +438,7 @@ class ChatApp:
             messagebox.showwarning("提示", "请先上线！")
             return
             
-        selected_peers = self.peers_list.selection()
+        selected_peers = self.checked_items
         if not selected_peers:
             messagebox.showwarning("提示", "请选择至少一个接收方")
             return
@@ -658,6 +671,26 @@ class ChatApp:
                         self.handle_message(message, addr)
                     elif message_type == 'file':
                         self.handle_file(message, addr)
+                    elif message_type == 'broadcast_reply':
+                        # 处理广播回复消息，但不显示在聊天区域
+                        content = message.get('content', {})
+                        sender_info = message.get('from', 'Unknown')
+                        sender_uuid = message.get('uuid')
+                        
+                        if sender_uuid and sender_uuid != self.uuid:  # 确保不是自己的消息
+                            peer_id = f"{sender_info}_{content.get('ip')}"
+                            if peer_id not in self.peers:
+                                # 添加新联系人
+                                peer_info = {
+                                    'hostname': sender_info,
+                                    'ip': content.get('ip'),
+                                    'port': content.get('port'),
+                                    'uuid': sender_uuid
+                                }
+                                self.peers[peer_id] = peer_info
+                                self.peers_list.insert('', 'end', peer_id,
+                                    values=(sender_info, content.get('ip'), content.get('port'), sender_uuid[:8]),
+                                    image=self.unchecked_img)
                 except json.JSONDecodeError:
                     # 如果不是JSON格式，认为是文件内容
                     continue
@@ -666,7 +699,28 @@ class ChatApp:
             except Exception as e:
                 if self.running:  # 只在running为True时打印错误
                     print(f"接收消息错误: {e}")
-    
+
+    def handle_broadcast_reply(self, message, addr):
+        # 处理广播回复消息
+        content = message.get('content', {})
+        sender_info = message.get('from', 'Unknown')
+        sender_uuid = message.get('uuid')
+        
+        if sender_uuid and sender_uuid != self.uuid:  # 确保不是自己的消息
+            peer_id = f"{sender_info}_{content.get('ip')}"
+            if peer_id not in self.peers:
+                # 添加新联系人
+                peer_info = {
+                    'hostname': sender_info,
+                    'ip': content.get('ip'),
+                    'port': content.get('port'),
+                    'uuid': sender_uuid
+                }
+                self.peers[peer_id] = peer_info
+                self.peers_list.insert('', 'end', peer_id,
+                    values=(sender_info, content.get('ip'), content.get('port'), sender_uuid[:8]),
+                    image=self.unchecked_img)
+
     def receive_broadcast(self):
         while self.running:
             if not self.broadcast_socket:
@@ -704,6 +758,22 @@ class ChatApp:
                 'type': 'system',
                 'content': f"新联系人已添加: {content['hostname']} ({content['ip']})"
             })
+            
+            # 回复一个消息给对方，告知本机在线
+            reply_message = {
+                'type': 'broadcast_reply',
+                'from': self.hostname,
+                'uuid': self.uuid,
+                'content': {
+                    'ip': self.local_ips[0],  # 使用第一个本地IP
+                    'port': self.UDP_PORT,
+                    'hostname': self.hostname
+                }
+            }
+            try:
+                self.socket.sendto(json.dumps(reply_message).encode(), (content['ip'], content['port']))
+            except Exception as e:
+                print(f"发送广播回复消息失败: {e}")
 
     def create_right_panel(self):
         # 右侧面板（聊天区域）
