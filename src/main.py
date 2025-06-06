@@ -32,6 +32,12 @@ class ChatApp:
         self.uuid = self.generate_uuid()
         self.peers = {}  # 存储对端信息
         
+        # 线程控制
+        self.running = False
+        self.message_thread = None
+        self.broadcast_thread = None
+        self.broadcast_timer = None
+        
         # 创建主框架
         self.main_frame = ttk.Frame(self.root, padding="10", style="Chat.TFrame")
         self.main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
@@ -196,18 +202,7 @@ class ChatApp:
     
     def go_online(self):
         if self.is_online:
-            try:
-                if self.socket:
-                    self.socket.close()
-                if self.broadcast_socket:
-                    self.broadcast_socket.close()
-            except:
-                pass
-            self.socket = None
-            self.broadcast_socket = None
-            self.is_online = False
-            self.online_button.config(text="上线")
-            self.port_entry.config(state='normal')
+            self.go_offline()
             return
         
         try:
@@ -227,6 +222,7 @@ class ChatApp:
             self.broadcast_socket.bind(('0.0.0.0', self.BROADCAST_PORT))
             
             self.is_online = True
+            self.running = True
             self.online_button.config(text="下线")
             self.port_entry.config(state='disabled')
             
@@ -237,7 +233,58 @@ class ChatApp:
             
         except Exception as e:
             messagebox.showerror("错误", f"上线失败: {str(e)}")
-            self.is_online = False
+            self.go_offline()
+    
+    def go_offline(self):
+        self.running = False
+        self.is_online = False
+        
+        # 取消定时广播
+        if self.broadcast_timer:
+            self.root.after_cancel(self.broadcast_timer)
+            self.broadcast_timer = None
+
+        # 关闭socket
+        if self.socket:
+            try:
+                self.socket.shutdown(socket.SHUT_RDWR)
+            except:
+                pass
+            try:
+                self.socket.close()
+            except:
+                pass
+            self.socket = None
+
+        if self.broadcast_socket:
+            try:
+                self.broadcast_socket.shutdown(socket.SHUT_RDWR)
+            except:
+                pass
+            try:
+                self.broadcast_socket.close()
+            except:
+                pass
+            self.broadcast_socket = None
+
+        # 等待线程结束
+        if self.message_thread and self.message_thread.is_alive():
+            self.message_thread.join(timeout=1.0)
+        if self.broadcast_thread and self.broadcast_thread.is_alive():
+            self.broadcast_thread.join(timeout=1.0)
+
+        self.message_thread = None
+        self.broadcast_thread = None
+        
+        # 更新UI
+        self.online_button.config(text="上线")
+        self.port_entry.config(state='normal')
+        
+        # 清空联系人列表
+        for item in self.peers_list.get_children():
+            self.peers_list.delete(item)
+        self.peers.clear()
+        self.checked_items.clear()
     
     def show_add_contact_dialog(self):
         dialog = tk.Toplevel(self.root)
@@ -489,51 +536,64 @@ class ChatApp:
                 time.sleep(0.1)
                 self.broadcast_socket.sendto(json.dumps(message).encode(), ('<broadcast>', self.BROADCAST_PORT))
         except Exception as e:
-            print(f"广播错误: {e}")
+            if self.running:  # 只在running为True时打印错误
+                print(f"广播错误: {e}")
         
         # 定期重新广播
-        self.root.after(10000, self.broadcast_presence)
+        self.broadcast_timer = self.root.after(10000, self.broadcast_presence)
     
     def start_network_threads(self):
         # 启动消息接收线程
-        message_thread = threading.Thread(target=self.receive_messages, daemon=True)
-        message_thread.start()
+        self.message_thread = threading.Thread(target=self.receive_messages, daemon=True)
+        self.message_thread.start()
         
         # 启动广播接收线程
-        broadcast_thread = threading.Thread(target=self.receive_broadcast, daemon=True)
-        broadcast_thread.start()
+        self.broadcast_thread = threading.Thread(target=self.receive_broadcast, daemon=True)
+        self.broadcast_thread.start()
         
         # 发送广播
         self.broadcast_presence()
     
-    def receive_broadcast(self):
-        while self.is_online:
-            try:
-                data, addr = self.broadcast_socket.recvfrom(65535)
-                message = json.loads(data.decode())
-                if message['type'] == 'broadcast':
-                    self.handle_broadcast(message, addr)
-            except Exception as e:
-                if self.is_online:  # 只在在线状态下打印错误
-                    print(f"接收广播错误: {e}")
-    
     def receive_messages(self):
-        while True:
+        while self.running:
+            if not self.socket:
+                break
             try:
+                self.socket.settimeout(1.0)  # 设置超时，以便能够检查running标志
                 data, addr = self.socket.recvfrom(65535)
                 try:
                     message = json.loads(data.decode())
-                    if message['type'] == 'broadcast':
-                        self.handle_broadcast(message, addr)
-                    elif message['type'] == 'message':
+                    if message['type'] == 'message':
                         self.handle_message(message, addr)
                     elif message['type'] == 'file':
                         self.handle_file(message, addr)
                 except json.JSONDecodeError:
                     # 如果不是JSON格式，认为是文件内容
                     continue
+            except socket.timeout:
+                continue
             except Exception as e:
-                print(f"接收消息错误: {e}")
+                if self.running:  # 只在running为True时打印错误
+                    print(f"接收消息错误: {e}")
+    
+    def receive_broadcast(self):
+        while self.running:
+            if not self.broadcast_socket:
+                break
+            try:
+                self.broadcast_socket.settimeout(1.0)  # 设置超时，以便能够检查running标志
+                data, addr = self.broadcast_socket.recvfrom(65535)
+                try:
+                    message = json.loads(data.decode())
+                    if message['type'] == 'broadcast':
+                        self.handle_broadcast(message, addr)
+                except json.JSONDecodeError:
+                    continue
+            except socket.timeout:
+                continue
+            except Exception as e:
+                if self.running:  # 只在running为True时打印错误
+                    print(f"接收广播错误: {e}")
 
     def create_right_panel(self):
         # 右侧面板（聊天区域）
