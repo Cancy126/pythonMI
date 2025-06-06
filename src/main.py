@@ -254,16 +254,16 @@ class ChatApp:
                     self.peers_list.item(item, image=self.checked_img)
     
     def delete_selected_contact(self):
-        selected = self.peers_list.selection()
-        if not selected:
-            messagebox.showwarning("提示", "请选择要删除的联系人")
+        if not self.checked_items:
+            messagebox.showwarning("提示", "请勾选要删除的联系人")
             return
             
-        if messagebox.askyesno("确认", "确定要删除选中的联系人吗？"):
-            for peer_id in selected:
+        if messagebox.askyesno("确认", "确定要删除勾选的联系人吗？"):
+            for peer_id in list(self.checked_items):  # 使用list创建副本，因为我们会在循环中修改set
                 self.peers_list.delete(peer_id)
                 if peer_id in self.peers:
                     del self.peers[peer_id]
+                self.checked_items.remove(peer_id)  # 从勾选集合中移除
     
     def refresh_peers(self):
         if not self.is_online:
