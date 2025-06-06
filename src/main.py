@@ -66,35 +66,65 @@ class ChatApp:
             return str(uuid.uuid4())
     
     def get_all_local_ips(self):
-        ips = []
-        try:
-            # 获取所有网络接口的IP地址
-            hostname = socket.gethostname()
-            # 获取所有IP（包括IPv4和IPv6）
-            all_ips = socket.getaddrinfo(hostname, None)
-            
-            # 过滤出IPv4地址
-            for ip in all_ips:
-                if ip[0] == socket.AF_INET:  # 只获取IPv4地址
-                    if ip[4][0] != '127.0.0.1':  # 排除本地回环地址
-                        ips.append(ip[4][0])
-            
-            # 尝试获取外部连接IP
-            try:
-                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                s.connect(('8.8.8.8', 80))
-                external_ip = s.getsockname()[0]
-                s.close()
-                if external_ip not in ips:
-                    ips.append(external_ip)
-            except:
-                pass
-                
-        except Exception as e:
-            print(f"获取IP地址错误: {e}")
-            ips.append('127.0.0.1')
+        ips = set()  # 使用set避免重复IP
         
-        return ips
+        try:
+            # 方法1：通过socket获取主机名解析
+            hostname = socket.gethostname()
+            try:
+                host_ips = socket.gethostbyname_ex(hostname)[2]
+                for ip in host_ips:
+                    if not ip.startswith('127.'):  # 排除本地回环地址
+                        ips.add(ip)
+            except Exception as e:
+                print(f"通过主机名获取IP失败: {e}")
+
+            # 方法2：通过创建UDP socket获取
+            try:
+                temp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                temp_sock.settimeout(0.1)
+                # 尝试连接一个公共DNS服务器（这里不会真正建立连接）
+                temp_sock.connect(('8.8.8.8', 80))
+                ip = temp_sock.getsockname()[0]
+                if not ip.startswith('127.'):
+                    ips.add(ip)
+                temp_sock.close()
+            except Exception as e:
+                print(f"通过UDP socket获取IP失败: {e}")
+
+            # 方法3：遍历所有网络接口
+            try:
+                for family, socktype, proto, canonname, sockaddr in socket.getaddrinfo(hostname, None):
+                    if family == socket.AF_INET:  # 只获取IPv4地址
+                        ip = sockaddr[0]
+                        if not ip.startswith('127.'):
+                            ips.add(ip)
+            except Exception as e:
+                print(f"通过getaddrinfo获取IP失败: {e}")
+
+            # 如果还是没有获取到IP，尝试最后的方法
+            if not ips:
+                try:
+                    # 在某些系统上，这个方法可能更可靠
+                    temp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    temp_sock.connect(('10.255.255.255', 1))
+                    ip = temp_sock.getsockname()[0]
+                    if not ip.startswith('127.'):
+                        ips.add(ip)
+                    temp_sock.close()
+                except Exception as e:
+                    print(f"通过备用方法获取IP失败: {e}")
+
+        except Exception as e:
+            print(f"获取IP地址时发生错误: {e}")
+
+        # 如果所有方法都失败，至少返回本地回环地址
+        if not ips:
+            print("警告: 无法获取有效的IP地址，使用本地回环地址")
+            ips.add('127.0.0.1')
+
+        # 转换为列表并排序，确保结果的一致性
+        return sorted(list(ips))
     
     def create_settings_panel(self):
         # 设置面板
