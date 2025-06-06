@@ -30,6 +30,7 @@ class ChatApp:
         self.hostname = socket.gethostname()
         self.local_ips = self.get_all_local_ips()
         self.uuid = self.generate_uuid()
+        self.station_id = "default-station"  # 添加站ID，默认值
         self.peers = {}  # 存储对端信息
         
         # 线程控制
@@ -139,6 +140,14 @@ class ChatApp:
         ttk.Label(host_info, text=self.hostname).pack(side=tk.LEFT, padx=(0, 20))
         ttk.Label(host_info, text="UUID：").pack(side=tk.LEFT)
         ttk.Label(host_info, text=self.uuid[:8]).pack(side=tk.LEFT, padx=(0, 20))
+        
+        # 站ID设置
+        station_frame = ttk.Frame(self.settings_frame)
+        station_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(station_frame, text="站ID：").pack(side=tk.LEFT)
+        self.station_entry = ttk.Entry(station_frame, width=20)
+        self.station_entry.insert(0, self.station_id)
+        self.station_entry.pack(side=tk.LEFT, padx=(0, 20))
         
         # IP地址显示
         ip_frame = ttk.Frame(self.settings_frame)
@@ -268,6 +277,12 @@ class ChatApp:
             return
         
         try:
+            # 获取并验证站ID
+            self.station_id = self.station_entry.get().strip()
+            if not self.station_id:
+                self.station_id = "default-station"
+                self.station_entry.insert(0, self.station_id)
+            
             port = int(self.port_entry.get())
             if port < 1024 or port > 65535:
                 raise ValueError("端口号必须在1024-65535之间")
@@ -287,6 +302,7 @@ class ChatApp:
             self.running = True
             self.online_button.config(text="下线")
             self.port_entry.config(state='disabled')
+            self.station_entry.config(state='disabled')  # 上线后禁用站ID输入
             
             # 启动网络线程
             self.start_network_threads()
@@ -341,6 +357,7 @@ class ChatApp:
         # 更新UI
         self.online_button.config(text="上线")
         self.port_entry.config(state='normal')
+        self.station_entry.config(state='normal')  # 下线后启用站ID输入
         
         # 清空联系人列表
         for item in self.peers_list.get_children():
@@ -418,7 +435,8 @@ class ChatApp:
         message_data = {
             'type': 'message',
             'from': self.hostname,
-            'uuid': self.uuid,  # 添加UUID到消息中
+            'uuid': self.uuid,
+            'station_id': self.station_id,  # 添加站ID
             'content': message,
             'timestamp': datetime.now().timestamp()
         }
@@ -454,7 +472,8 @@ class ChatApp:
         file_info = {
             'type': 'file',
             'from': self.hostname,
-            'uuid': self.uuid,  # 添加UUID到文件信息中
+            'uuid': self.uuid,
+            'station_id': self.station_id,  # 添加站ID
             'content': {
                 'filename': file_name,
                 'filesize': file_size
@@ -522,6 +541,12 @@ class ChatApp:
         self.chat_display.config(state='disabled')
     
     def handle_file(self, message, addr):
+        # 检查站ID是否匹配
+        sender_station_id = message.get('station_id', 'default-station')
+        if sender_station_id != self.station_id:
+            print(f"忽略来自不同站的文件: {sender_station_id}")
+            return
+            
         # 检查发送者是否在联系人列表中
         sender_info = message.get('from', 'Unknown')
         sender_uuid = message.get('uuid')
@@ -534,7 +559,8 @@ class ChatApp:
                     'hostname': sender_info,
                     'ip': addr[0],
                     'port': addr[1],
-                    'uuid': sender_uuid
+                    'uuid': sender_uuid,
+                    'station_id': sender_station_id  # 保存对方的站ID
                 }
                 self.peers[peer_id] = peer_info
                 self.peers_list.insert('', 'end', peer_id,
@@ -591,6 +617,12 @@ class ChatApp:
             self.root.after(2000, lambda: self.progress.configure(value=0))
     
     def handle_message(self, message, addr):
+        # 检查站ID是否匹配
+        sender_station_id = message.get('station_id', 'default-station')
+        if sender_station_id != self.station_id:
+            print(f"忽略来自不同站的消息: {sender_station_id}")
+            return
+            
         # 检查发送者是否在联系人列表中
         sender_info = message.get('from', 'Unknown')
         sender_uuid = message.get('uuid')
@@ -603,7 +635,8 @@ class ChatApp:
                     'hostname': sender_info,
                     'ip': addr[0],
                     'port': addr[1],
-                    'uuid': sender_uuid
+                    'uuid': sender_uuid,
+                    'station_id': sender_station_id  # 保存对方的站ID
                 }
                 self.peers[peer_id] = peer_info
                 self.peers_list.insert('', 'end', peer_id,
@@ -630,7 +663,8 @@ class ChatApp:
                     'ip': ip,
                     'port': self.UDP_PORT,
                     'hostname': self.hostname,
-                    'uuid': self.uuid
+                    'uuid': self.uuid,
+                    'station_id': self.station_id  # 添加站ID到广播消息
                 }
             }
             
@@ -745,8 +779,15 @@ class ChatApp:
         if content['uuid'] == self.uuid:
             return  # 忽略自己的广播
             
+        # 检查站ID是否匹配
+        sender_station_id = content.get('station_id', 'default-station')
+        if sender_station_id != self.station_id:
+            print(f"忽略来自不同站的广播: {sender_station_id}")
+            return
+            
         peer_id = f"{content['hostname']}_{content['ip']}"
         if peer_id not in self.peers:
+            content['station_id'] = sender_station_id  # 保存对方的站ID
             self.peers[peer_id] = content
             self.peers_list.insert('', 'end', peer_id, 
                 values=(content['hostname'], content['ip'], 
@@ -764,6 +805,7 @@ class ChatApp:
                 'type': 'broadcast_reply',
                 'from': self.hostname,
                 'uuid': self.uuid,
+                'station_id': self.station_id,  # 添加站ID到回复消息
                 'content': {
                     'ip': self.local_ips[0],  # 使用第一个本地IP
                     'port': self.UDP_PORT,
